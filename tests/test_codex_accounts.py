@@ -537,8 +537,13 @@ class CodexWidgetTests(unittest.TestCase):
         from widget_harness import render, text, nodes, tooltip_text
         accounts = [{'windows': [{'label': 'Session', 'used_percent': 100}]},
                     {'windows': [{'label': 'Session', 'used_percent': 42}]}]
-        # Stale means age >= the 600 s default refresh interval.
-        for age in [None, 600, 1801, 'bad', -1]:
+        # Fork contract: stale means age >= the 600 s default refresh interval
+        # plus the 120 s display grace. The out-of-band refresh fires at the
+        # interval and needs a few seconds to land, so a payload a poll is
+        # already refreshing (600/719) is shown without the strike; the strike
+        # marks a refresh that has actually failed to land.
+        cases = [(None, True), (600, False), (719, False), (720, True), (1801, True), ('bad', True), (-1, True)]
+        for age, stale_expected in cases:
             for mode in ['all', 'worst']:
                 with self.subTest(age=age, mode=mode):
                     data = {'age_s': age, 'providers': {'openai-codex': {'accounts': accounts}}}
@@ -546,6 +551,12 @@ class CodexWidgetTests(unittest.TestCase):
                     chip = next(n for n in nodes(tree) if n.get('type') == 'button')
                     self.assertIn('Account 2', text(chip))
                     self.assertIn('58%', text(chip))
+                    if not stale_expected:
+                        self.assertNotIn('stale', tooltip_text(tree).lower())
+                        struck = [n for n in nodes(chip) if n.get('props', {}).get('className') == 'tabular-nums'
+                                  and n.get('props', {}).get('style', {}).get('textDecoration') == 'line-through']
+                        self.assertEqual(struck, [])
+                        continue
                     value = next(n for n in nodes(chip) if n.get('props', {}).get('className') == 'tabular-nums')
                     self.assertEqual(value['props']['style']['textDecoration'], 'line-through')
                     self.assertIn('stale', tooltip_text(tree).lower())

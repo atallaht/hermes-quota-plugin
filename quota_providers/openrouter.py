@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.request
 
-from .base import QuotaResult, QuotaWindow, build_unavailable, urlopen_no_redirect
+from .base import AccountBalance, QuotaResult, QuotaWindow, build_unavailable, urlopen_no_redirect
 from .registry import register
 
 _BASE_URL = "https://openrouter.ai/api/v1"
@@ -176,13 +176,15 @@ def _wallet_result(label, secret):
         total = _amount(data.get("total_credits")) if isinstance(data, dict) else None
         used = _amount(data.get("total_usage")) if isinstance(data, dict) else None
         if error or total is None or used is None:
-            return False, f"Account credits unavailable via {label} ({error or 'parse-pending'})"
+            return False, f"Account credits unavailable via {label} ({error or 'parse-pending'})", None
+        # Fork: carry the computed amount so the single-scoped wallet can render
+        # as a balance row (chip money for a no-window provider).
         return True, (
             f"Account wallet via {label}: USD {total - used:.2f} remaining "
             "(shared account credits, shown once; not summed across keys)"
-        )
+        ), total - used
     except Exception:
-        return False, f"Account credits unavailable via {label} (fetch-error)"
+        return False, f"Account credits unavailable via {label} (fetch-error)", None
 
 
 @register("openrouter")
@@ -214,9 +216,13 @@ def fetch_openrouter_quota() -> QuotaResult:
             except queue.Empty:
                 break
             results[index] = result
-        has_data, wallet = results.get(-1, (False, f"Account credits unavailable via {primary_label} (timeout)"))
+        has_data, wallet, wallet_amount = results.get(-1, (False, f"Account credits unavailable via {primary_label} (timeout)", None))
         details.append(wallet)
         details.append("Account membership of other keys is unverified; wallet is not a total across accounts")
+        # Fork: the single, explicitly scoped wallet becomes one balance row so
+        # a no-window provider renders real money on the chip instead of an
+        # em-dash. Display-only; never a key cap or a percentage denominator.
+        account_balances = [AccountBalance("USD", f"{wallet_amount:.2f}")] if wallet_amount is not None else []
         windows = []
         for index, (label, _) in enumerate(credentials):
             ws, ds = results.get(index, ([], [f"{label}: unavailable (timeout)"]))
@@ -224,6 +230,7 @@ def fetch_openrouter_quota() -> QuotaResult:
             windows.extend(ws)
             details.extend(ds)
         return QuotaResult(label="openrouter", windows=windows, details=details,
+                           account_balances=account_balances,
                            unavailable_reason=None if has_data else "no-data")
     except Exception:
         return build_unavailable("openrouter", "fetch-error")
