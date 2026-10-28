@@ -652,10 +652,21 @@ function asProvider(value) {
 }
 
 function worstWindow(provider) {
+	const windows = asWindowList(provider && provider.windows).filter(
+		(w) => remainingPct(w) != null,
+	);
+	if (!windows.length) return null;
+	// Local preference (atallaht fork): the chip ring tracks the rolling
+	// 5h session window when the provider has one — it is the window that
+	// actually runs out mid-work; the weekly window still shows in the
+	// tooltip and the pane. Only providers without a session window fall
+	// back to the worst window.
+	const session = windows.filter(
+		(w) => /session|5h/i.test(String((w && w.label) || "")),
+	);
 	let worst = null;
-	for (const w of asWindowList(provider && provider.windows)) {
+	for (const w of session.length ? session : windows) {
 		const r = remainingPct(w);
-		if (r == null) continue;
 		if (worst == null || r < worst) worst = r;
 	}
 	return worst;
@@ -1472,7 +1483,12 @@ function providerEntries(providers) {
 // Keep expanded entries for the pane, but only one representative per provider
 // in the status bar. This is display selection, never runtime routing.
 function codexRemaining(account) {
-	const windows = asWindowList(account?.windows).filter((w) => ["Session", "Weekly"].includes(w.label));
+	const all = asWindowList(account?.windows).filter((w) => ["Session", "Weekly"].includes(w.label));
+	// Local preference (atallaht fork): the ring tracks the 5h session
+	// window when present; the weekly window stays in tooltip and pane.
+	const windows = all.some((w) => w.label === "Session")
+		? all.filter((w) => w.label === "Session")
+		: all;
 	if (account?.unavailable_reason || !windows.length || windows.some((w) => typeof w.used_percent !== "number" || !Number.isFinite(w.used_percent))) return null;
 	return Math.max(0, Math.min(...windows.map((w) => 100 - w.used_percent)));
 }
@@ -1487,7 +1503,11 @@ function useCodexStale(data, untrusted = false) {
 	const received = useRef({ data, at: now });
 	if (received.current.data !== data) received.current = { data, at: now };
 	const age = data?.age_s;
-	return untrusted || typeof age !== "number" || !Number.isFinite(age) || age < 0 || age + (now - received.current.at) / 1000 >= interval;
+	// Local preference (atallaht fork): 120s display grace. The out-of-band
+	// refresh (fired at `>= interval` in the query) needs a few seconds to
+	// land; without grace every poll cycle briefly struck the chip through
+	// before the fresh payload arrived. Strike only when truly overdue.
+	return untrusted || typeof age !== "number" || !Number.isFinite(age) || age < 0 || age + (now - received.current.at) / 1000 >= interval + 120;
 }
 
 function statusEntries(providers, stale = false) {
